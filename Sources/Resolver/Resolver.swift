@@ -120,9 +120,9 @@ public final class Resolver {
     /// - returns: ResolverOptions instance that allows further customization of registered Service.
     ///
     @discardableResult
-    public static func register<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil,
+    public static func register<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil, multi: Bool = false,
                                          factory: @escaping ResolverFactory<Service>) -> ResolverOptions<Service> {
-        return main.register(type, name: name, factory: factory)
+        return main.register(type, name: name, multi: multi, factory: factory)
     }
 
     /// Static shortcut function used to register a specific Service type and its instantiating factory method.
@@ -134,9 +134,9 @@ public final class Resolver {
     /// - returns: ResolverOptions instance that allows further customization of registered Service.
     ///
     @discardableResult
-    public static func register<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil,
+    public static func register<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil, multi: Bool = false,
                                          factory: @escaping ResolverFactoryResolver<Service>) -> ResolverOptions<Service> {
-        return main.register(type, name: name, factory: factory)
+        return main.register(type, name: name, multi: multi, factory: factory)
     }
 
     /// Static shortcut function used to register a specific Service type and its instantiating factory method with multiple argument support.
@@ -148,9 +148,9 @@ public final class Resolver {
     /// - returns: ResolverOptions instance that allows further customization of registered Service.
     ///
     @discardableResult
-    public static func register<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil,
+    public static func register<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil, multi: Bool = false,
                                          factory: @escaping ResolverFactoryArgumentsN<Service>) -> ResolverOptions<Service> {
-        return main.register(type, name: name, factory: factory)
+        return main.register(type, name: name, multi: multi, factory: factory)
     }
 
     /// Registers a specific Service type and its instantiating factory method.
@@ -162,14 +162,14 @@ public final class Resolver {
     /// - returns: ResolverOptions instance that allows further customization of registered Service.
     ///
     @discardableResult
-    public final func register<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil,
+    public final func register<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil, multi: Bool = false,
                                         factory: @escaping ResolverFactory<Service>) -> ResolverOptions<Service> {
         lock.lock()
         defer { lock.unlock() }
         let key = Int(bitPattern: ObjectIdentifier(Service.self))
         let factory: ResolverFactoryAnyArguments = { (_,_) in factory() }
         let registration = ResolverRegistration<Service>(resolver: self, key: key, name: name, factory: factory)
-        add(registration: registration, with: key, name: name)
+        add(registration: registration, with: key, name: name, multi: multi)
         return ResolverOptions(registration: registration)
     }
 
@@ -182,14 +182,14 @@ public final class Resolver {
     /// - returns: ResolverOptions instance that allows further customization of registered Service.
     ///
     @discardableResult
-    public final func register<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil,
+    public final func register<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil, multi: Bool = false,
                                         factory: @escaping ResolverFactoryResolver<Service>) -> ResolverOptions<Service> {
         lock.lock()
         defer { lock.unlock() }
         let key = Int(bitPattern: ObjectIdentifier(Service.self))
         let factory: ResolverFactoryAnyArguments = { (r,_) in factory(r) }
         let registration = ResolverRegistration<Service>(resolver: self, key: key, name: name, factory: factory)
-        add(registration: registration, with: key, name: name)
+        add(registration: registration, with: key, name: name, multi: multi)
         return ResolverOptions(registration: registration)
     }
 
@@ -202,18 +202,52 @@ public final class Resolver {
     /// - returns: ResolverOptions instance that allows further customization of registered Service.
     ///
     @discardableResult
-    public final func register<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil,
+    public final func register<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil, multi: Bool = false,
                                         factory: @escaping ResolverFactoryArgumentsN<Service>) -> ResolverOptions<Service> {
         lock.lock()
         defer { lock.unlock() }
         let key = Int(bitPattern: ObjectIdentifier(Service.self))
         let factory: ResolverFactoryAnyArguments = { (r,a) in factory(r, Args(a)) }
         let registration = ResolverRegistration<Service>(resolver: self, key: key, name: name, factory: factory )
-        add(registration: registration, with: key, name: name)
+        add(registration: registration, with: key, name: name, multi: multi)
         return ResolverOptions(registration: registration)
     }
 
     // MARK: - Service Resolution
+    
+    /// Static function calls the root registry to resolve an array of given Service type.
+    ///
+    /// - important: Use this method to resolve an array of Service which are registered separately whith `TRUE` value of `multi` parameter
+    ///
+    /// - parameter type: Type of Service being resolved. Optional, may be inferred by assignment result type.
+    /// - parameter name: Named variant of Service being resolved.
+    /// - parameter args: Optional arguments that may be passed to registration factory.
+    ///
+    /// - returns: Instance of specified Service.
+    public static func multiResolve<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil, args: Any? = nil) -> [Service] {
+        return main.multiResolve(type, name: name, args: args)
+    }
+    
+    /// Resolves and returns an array of the given Service type from the current registry or from its
+    /// parent registries.
+    ///
+    /// - important: Use this method to resolve an array of Service which are registered separately whith `TRUE` value of `multi` parameter
+    ///
+    /// - parameter type: Type of Service being resolved. Optional, may be inferred by assignment result type.
+    /// - parameter name: Named variant of Service being resolved.
+    /// - parameter args: Optional arguments that may be passed to registration factory.
+    ///
+    /// - returns: Instance of specified Service.
+    ///
+    public final func multiResolve<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil, args: Any? = nil) -> [Service] {
+        lock.lock()
+        defer { lock.unlock() }
+        registrationCheck()
+        if let multiRegistrations = lookup(type, name: name) as? MultiRegistration<Service> {
+            return multiRegistrations.registrations.compactMap { $0.scope.resolve(resolver: self, registration: $0, args: args) }
+        }
+        fatalError("RESOLVER: '\(Service.self):\(name?.rawValue ?? "NONAME")' not resolved. To disambiguate optionals use resolver.optional().")
+    }
 
     /// Static function calls the root registry to resolve a given Service type.
     ///
@@ -223,14 +257,7 @@ public final class Resolver {
     ///
     /// - returns: Instance of specified Service.
     public static func resolve<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil, args: Any? = nil) -> Service {
-        lock.lock()
-        defer { lock.unlock() }
-        registrationCheck()
-        if let registration = root.lookup(type, name: name),
-            let service = registration.scope.resolve(resolver: root, registration: registration, args: args) {
-            return service
-        }
-        fatalError("RESOLVER: '\(Service.self):\(name?.rawValue ?? "NONAME")' not resolved. To disambiguate optionals use resolver.optional().")
+        return main.resolve(type, name: name, args: args)
     }
 
     /// Resolves and returns an instance of the given Service type from the current registry or from its
@@ -243,14 +270,7 @@ public final class Resolver {
     /// - returns: Instance of specified Service.
     ///
     public final func resolve<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil, args: Any? = nil) -> Service {
-        lock.lock()
-        defer { lock.unlock() }
-        registrationCheck()
-        if let registration = lookup(type, name: name),
-            let service = registration.scope.resolve(resolver: self, registration: registration, args: args) {
-            return service
-        }
-        fatalError("RESOLVER: '\(Service.self):\(name?.rawValue ?? "NONAME")' not resolved. To disambiguate optionals use resolver.optional().")
+        return resolve(type, name: name, args: args, isOptional: false)!
     }
 
     /// Static function calls the root registry to resolve an optional Service type.
@@ -262,14 +282,7 @@ public final class Resolver {
     /// - returns: Instance of specified Service.
     ///
     public static func optional<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil, args: Any? = nil) -> Service? {
-        lock.lock()
-        defer { lock.unlock() }
-        registrationCheck()
-        if let registration = root.lookup(type, name: name),
-            let service = registration.scope.resolve(resolver: root, registration: registration, args: args) {
-            return service
-        }
-        return nil
+        return main.optional(type, name: name, args: args)
     }
 
     /// Resolves and returns an optional instance of the given Service type from the current registry or
@@ -282,27 +295,33 @@ public final class Resolver {
     /// - returns: Instance of specified Service.
     ///
     public final func optional<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil, args: Any? = nil) -> Service? {
-        lock.lock()
-        defer { lock.unlock() }
-        registrationCheck()
-        if let registration = lookup(type, name: name),
-            let service = registration.scope.resolve(resolver: self, registration: registration, args: args) {
-            return service
-        }
-        return nil
+        return resolve(type, name: name, args: args, isOptional: true)
     }
 
     // MARK: - Internal
+    
+    /// Internal function resolves both Optional and Non-Optional Service
+    private final func resolve<Service>(_ type: Service.Type = Service.self, name: Resolver.Name? = nil, args: Any? = nil, isOptional: Bool) -> Service? {
+        lock.lock()
+        defer { lock.unlock() }
+        registrationCheck()
+        if let registration = lookup(type, name: name) as? ResolverRegistration<Service>,
+           let service = registration.scope.resolve(resolver: self, registration: registration, args: args) {
+            return service
+        }
+        if isOptional { return nil }
+        fatalError("RESOLVER: '\(Service.self):\(name?.rawValue ?? "NONAME")' not resolved. To disambiguate optionals use resolver.optional().")
+    }
 
     /// Internal function searches the current and child registries for a ResolverRegistration<Service> that matches
     /// the supplied type and name.
-    private final func lookup<Service>(_ type: Service.Type, name: Resolver.Name?) -> ResolverRegistration<Service>? {
+    private final func lookup<Service>(_ type: Service.Type, name: Resolver.Name?) -> Any? {
         let key = Int(bitPattern: ObjectIdentifier(Service.self))
         if let name = name?.rawValue {
-            if let registration = namedRegistrations["\(key):\(name)"] as? ResolverRegistration<Service> {
+            if let registration = namedRegistrations["\(key):\(name)"] {
                 return registration
             }
-        } else if let registration = typedRegistrations[key] as? ResolverRegistration<Service> {
+        } else if let registration = typedRegistrations[key] {
             return registration
         }
         for child in childContainers {
@@ -314,11 +333,23 @@ public final class Resolver {
     }
 
     /// Internal function adds a new registration to the proper container.
-    private final func add<Service>(registration: ResolverRegistration<Service>, with key: Int, name: Resolver.Name?) {
-        if let name = name?.rawValue {
-            namedRegistrations["\(key):\(name)"] = registration
-        } else {
-            typedRegistrations[key] = registration
+    private final func add<Service>(registration: ResolverRegistration<Service>, with key: Int, name: Resolver.Name?, multi: Bool) {
+        if multi {
+            if let name = name?.rawValue {
+                var registrations: MultiRegistration<Service> = namedRegistrations["\(key):\(name)"] as? MultiRegistration<Service> ?? .init()
+                registrations.add(registration)
+                namedRegistrations["\(key):\(name)"] = registrations
+            } else {
+                var registrations: MultiRegistration<Service> = typedRegistrations[key] as? MultiRegistration<Service> ?? .init()
+                registrations.add(registration)
+                typedRegistrations[key] = registrations
+            }
+        }else {
+            if let name = name?.rawValue {
+                namedRegistrations["\(key):\(name)"] = registration
+            } else {
+                typedRegistrations[key] = registration
+            }
         }
     }
 
@@ -426,6 +457,19 @@ extension Resolver {
 
     }
 
+}
+
+/// Resolver Multi Injection Support
+extension Resolver {
+    
+    private struct MultiRegistration<Service> {
+        var registrations: [ResolverRegistration<Service>] = []
+        
+        mutating func add(_ registration: ResolverRegistration<Service>) {
+            registrations.append(registration)
+        }
+    }
+    
 }
 
 // Registration Internals
@@ -837,6 +881,76 @@ public extension UIViewController {
     }
 }
 
+/// Immediate injection property wrapper.
+///
+/// Wrapped dependent service is resolved immediately using Resolver.root upon struct initialization.
+///
+@propertyWrapper public struct MultiInjected<Service> {
+    private var services: [Service]
+    public init() {
+        self.services = Resolver.multiResolve(Service.self)
+    }
+    public init(name: Resolver.Name? = nil, container: Resolver? = nil) {
+        self.services = container?.multiResolve(Service.self, name: name) ?? Resolver.multiResolve(Service.self, name: name)
+    }
+    public var wrappedValue: [Service] {
+        get { return services }
+        mutating set { services = newValue }
+    }
+    public var projectedValue: MultiInjected<Service> {
+        get { return self }
+        mutating set { self = newValue }
+    }
+}
+
+/// Lazy injection property wrapper. Note that embedded container and name properties will be used if set prior to service instantiation.
+///
+/// Wrapped dependent service is not resolved until service is accessed.
+///
+@propertyWrapper public struct MultiLazyInjected<Service> {
+    private var lock = Resolver.lock
+    private var initialize: Bool = true
+    private var services: [Service]!
+    public var container: Resolver?
+    public var name: Resolver.Name?
+    public var args: Any?
+    public init() {}
+    public init(name: Resolver.Name? = nil, container: Resolver? = nil) {
+        self.name = name
+        self.container = container
+    }
+    public var isEmpty: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return services == nil || services.isEmpty
+    }
+    public var wrappedValue: [Service] {
+        mutating get {
+            lock.lock()
+            defer { lock.unlock() }
+            if initialize {
+                self.initialize = false
+                self.services = container?.multiResolve(Service.self, name: name, args: args) ?? Resolver.multiResolve(Service.self, name: name, args: args)
+            }
+            return services
+        }
+        mutating set {
+            lock.lock()
+            defer { lock.unlock() }
+            initialize = false
+            services = newValue
+        }
+    }
+    public var projectedValue: MultiLazyInjected<Service> {
+        get { return self }
+        mutating set { self = newValue }
+    }
+    public mutating func release() {
+        lock.lock()
+        defer { lock.unlock() }
+        self.services = nil
+    }
+}
 #if os(iOS) || os(macOS) || os(tvOS) || os(watchOS)
 /// Immediate injection property wrapper for SwiftUI ObservableObjects. This wrapper is meant for use in SwiftUI Views and exposes
 /// bindable objects similar to that of SwiftUI @observedObject and @environmentObject.
